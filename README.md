@@ -1,6 +1,6 @@
 # Jitsi Meet on Kubernetes
 
-Internal Jitsi Meet deployment for Transmedika on a 2-node k8s cluster.
+Internal Jitsi Meet deployment on a 2-node k8s cluster.
 
 ## Cluster
 
