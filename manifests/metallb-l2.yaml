@@ -1,0 +1,15 @@
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  annotations:
+    kubectl.kubernetes.io/last-applied-configuration: |
+      {"apiVersion":"metallb.io/v1beta1","kind":"L2Advertisement","metadata":{"annotations":{},"name":"jitsi-l2","namespace":"metallb-system"},"spec":{"ipAddressPools":["jitsi-pool"]}}
+  creationTimestamp: "2026-04-30T02:54:56Z"
+  generation: 1
+  name: jitsi-l2
+  namespace: metallb-system
+  resourceVersion: "4389"
+  uid: e29a16e1-62d0-4cf8-a1ae-e95743c675b0
+spec:
+  ipAddressPools:
+  - jitsi-pool

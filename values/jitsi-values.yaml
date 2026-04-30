@@ -1,0 +1,77 @@
+publicURL: "https://vidcall3.internal"
+
+enableAuth: true
+enableGuests: true
+
+xmpp:
+  domain: meet.jitsi
+  authDomain: auth.meet.jitsi
+  mucDomain: muc.meet.jitsi
+  internalMucDomain: internal-muc.meet.jitsi
+  guestDomain: guest.meet.jitsi
+
+web:
+  replicaCount: 1
+  service:
+    type: ClusterIP
+    port: 80
+  httpsEnabled: false
+  httpRedirect: false
+  nodeSelector:
+    kubernetes.io/hostname: srv-deploy-eng
+  ingress:
+    enabled: true
+    annotations:
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    hosts:
+      - host: vidcall3.internal
+        paths:
+          - /
+    tls:
+      - secretName: jitsi-tls
+        hosts:
+          - vidcall3.internal
+  extraEnvs:
+    ENABLE_XMPP_WEBSOCKET: "1"
+    ENABLE_COLIBRI_WEBSOCKET: "1"
+
+prosody:
+  persistence:
+    enabled: true
+    size: 1Gi
+
+jicofo:
+  xmpp:
+    password: "focuspass"
+
+jvb:
+  replicaCount: 1
+  UDPPort: 10000
+  service:
+    enabled: true
+    type: NodePort
+    nodePort: 30000
+  publicIPs:
+    - 192.168.20.180
+    - 192.168.20.177
+  useNodeIP: false
+  stunServers: ""
+  useInternalStun: false
+  xmpp:
+    password: "jvbpass123"
+  extraEnvs:
+    JVB_ENABLE_APIS: "rest,colibri"
+    JVB_ENABLE_COLIBRI_WS: "1"
+  resources:
+    requests:
+      cpu: 300m
+      memory: 512Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+websockets:
+  colibri:
+    enabled: true
+  xmpp:
+    enabled: true

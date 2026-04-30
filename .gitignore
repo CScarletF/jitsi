@@ -1,0 +1,12 @@
+# Secrets - never commit these
+secrets/*
+!secrets/.gitignore
+jitsi-tls/
+*.key
+*.crt
+
+# Backup files
+backup/
+
+# Helm cache
+.helm/
