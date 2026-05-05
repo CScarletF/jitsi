@@ -46,11 +46,11 @@ jicofo:
 
 jvb:
   replicaCount: 1
-  UDPPort: 10000
+  UDPPort: 31829
   service:
     enabled: true
     type: NodePort
-    nodePort: 30000
+    nodePort: 31829
   publicIPs:
     - 192.168.20.180
     - 192.168.20.177
@@ -62,6 +62,7 @@ jvb:
   extraEnvs:
     JVB_ENABLE_APIS: "rest,colibri"
     JVB_ENABLE_COLIBRI_WS: "1"
+    JVB_WS_SERVER_ID: "jvb-1"
   resources:
     requests:
       cpu: 300m
