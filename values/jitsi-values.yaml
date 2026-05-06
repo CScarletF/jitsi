@@ -39,6 +39,8 @@ prosody:
   persistence:
     enabled: true
     size: 1Gi
+  nodeSelector:
+    kubernetes.io/hostname: srv-deploy-eng
 
 jicofo:
   xmpp:
