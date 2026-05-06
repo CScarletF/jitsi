@@ -4,10 +4,10 @@ Internal Jitsi Meet deployment on a 2-node k8s cluster.
 
 ## Cluster
 
-| Host | IP | Role |
-|---|---|---|
-| srv-deploy-eng | 192.168.20.180 | control-plane |
-| jenkins | 192.168.20.177 | worker |
+| Host            | IP             |  Role         |
+|-----------------|----------------|---------------|
+| srv-deploy-eng  | 192.168.20.180 | control-plane |
+| jenkins         | 192.168.20.177 | worker        |
 
 - LoadBalancer IP: `192.168.20.190` (MetalLB)
 - Access: `https://vidcall3.internal`
@@ -26,7 +26,7 @@ cd scripts/
 bash 01-install-deps.sh
 bash 02-install-jitsi.sh
 bash 03-create-user.sh admin yourpassword
-bash 04-add-hosts.sh
+bash 04-create-hosts.sh
 ```
 
 ## Adding Moderator Users
@@ -59,5 +59,5 @@ Before any major change, snapshot the active config:
 
 ```bash
 mkdir -p ~/jitsi-snapshots/jitsi-k8s-<description>-$(date +%Y-%m-%d)
-cp ~/jitsi-active/* ~/jitsi-snapshots/jitsi-k8s-<description>-$(date +%Y-%m-%d)/
+cp -r ~/jitsi-helm-local/* ~/jitsi-snapshots/jitsi-k8s-<description>-$(date +%Y-%m-%d)/
 ```
