@@ -1,9 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-ENTRY="192.168.20.190  vidcall3.internal"
+ENTRY="192.168.20.190  vidcall3-prod.transmedika.co.id"
 
-if grep -q "vidcall3.internal" /etc/hosts; then
+if grep -q "vidcall3-prod.transmedika.co.id" /etc/hosts; then
   echo "Host entry already exists, skipping."
 else
   echo "$ENTRY" | sudo tee -a /etc/hosts

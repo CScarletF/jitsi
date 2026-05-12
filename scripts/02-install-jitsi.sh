@@ -22,9 +22,15 @@ else
     -n ingress-nginx \
     --create-namespace \
     --set controller.service.type=LoadBalancer \
-    --set controller.service.loadBalancerIP=192.168.20.190
+    --set controller.service.loadBalancerIP=192.168.20.190 \
+    --set controller.service.annotations."metallb\\.io/allow-shared-ip"=jitsi-shared
   kubectl rollout status deployment ingress-nginx-controller -n ingress-nginx --timeout=90s
 fi
+
+kubectl annotate service ingress-nginx-controller \
+  -n ingress-nginx \
+  metallb.io/allow-shared-ip=jitsi-shared \
+  --overwrite
 
 echo "=== [4/6] Generating TLS certificate ==="
 if kubectl get secret jitsi-tls -n $NAMESPACE &>/dev/null; then
@@ -34,8 +40,8 @@ else
   openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
     -keyout $TLS_KEY \
     -out $TLS_CERT \
-    -subj "/CN=vidcall3.internal" \
-    -addext "subjectAltName=DNS:vidcall3.internal"
+    -subj "/CN=vidcall3-prod.transmedika.co.id" \
+    -addext "subjectAltName=DNS:vidcall3-prod.transmedika.co.id"
   kubectl create secret tls jitsi-tls \
     --cert=$TLS_CERT \
     --key=$TLS_KEY \
@@ -50,7 +56,8 @@ else
   helm install jitsi jitsi/jitsi-meet -n $NAMESPACE -f $VALUES_FILE
 fi
 
-echo "=== [6/6] Applying HPA ==="
+echo "=== [6/6] Applying supporting manifests ==="
+kubectl apply -f ../manifests/jitsi-colibri-ws.yaml
 kubectl apply -f ../manifests/jitsi-hpa.yaml
 
 echo "=== Waiting for pods ==="
@@ -59,5 +66,5 @@ kubectl rollout status deployment jitsi-jitsi-meet-jicofo -n $NAMESPACE --timeou
 kubectl rollout status deployment jitsi-jitsi-meet-jvb-0 -n $NAMESPACE --timeout=120s
 
 echo ""
-echo "=== Done! Jitsi is available at https://vidcall3.internal ==="
+echo "=== Done! Jitsi is available at https://vidcall3-prod.transmedika.co.id ==="
 echo "=== Run 03-create-user.sh to add moderator accounts ==="

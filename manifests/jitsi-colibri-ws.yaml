@@ -1,3 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jitsi-colibri-ws-headers
+  namespace: jitsi
+data:
+  Connection: "upgrade"
+  Host: "$host"
+  Upgrade: "$http_upgrade"
+  X-Forwarded-Proto: "$scheme"
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

@@ -9,9 +9,10 @@ Internal Jitsi Meet deployment on a 2-node k8s cluster.
 | srv-deploy-eng  | 192.168.20.180 | control-plane |
 | jenkins         | 192.168.20.177 | worker        |
 
-- LoadBalancer IP: `192.168.20.190` (MetalLB)
-- Access: `https://vidcall3.internal`
+- LoadBalancer IP: `192.168.20.190` (MetalLB, shared by ingress-nginx TCP/443 and JVB UDP/31829)
+- Access: `https://vidcall3-prod.transmedika.co.id`
 - Auth: internal (Prosody users)
+- Public JVB IP advertised to clients: `157.15.164.236`
 
 ## Prerequisites
 

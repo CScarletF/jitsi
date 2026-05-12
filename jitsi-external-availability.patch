@@ -1,0 +1,215 @@
+From e9f026ce4301634644d954166812f41e2a11cd4e Mon Sep 17 00:00:00 2001
+From: Codex <codex@openai.com>
+Date: Tue, 12 May 2026 04:51:46 +0000
+Subject: [PATCH] Fix Jitsi bridge load balancer exposure
+
+---
+ README.md                       |  5 +++--
+ manifests/jitsi-colibri-ws.yaml | 13 ++++++++++++-
+ manifests/metallb-l2.yaml       |  9 +--------
+ manifests/metallb-pool.yaml     |  9 +--------
+ scripts/02-install-jitsi.sh     | 19 +++++++++++++------
+ scripts/04-create-hosts.sh      |  6 +++---
+ values/jitsi-values.yaml        |  8 ++++++--
+ 7 files changed, 39 insertions(+), 30 deletions(-)
+
+diff --git a/README.md b/README.md
+index e1f928f..2253524 100644
+--- a/README.md
++++ b/README.md
+@@ -9,9 +9,10 @@ Internal Jitsi Meet deployment on a 2-node k8s cluster.
+ | srv-deploy-eng  | 192.168.20.180 | control-plane |
+ | jenkins         | 192.168.20.177 | worker        |
+ 
+-- LoadBalancer IP: `192.168.20.190` (MetalLB)
+-- Access: `https://vidcall3.internal`
++- LoadBalancer IP: `192.168.20.190` (MetalLB, shared by ingress-nginx TCP/443 and JVB UDP/31829)
++- Access: `https://vidcall3-prod.transmedika.co.id`
+ - Auth: internal (Prosody users)
++- Public JVB IP advertised to clients: `157.15.164.236`
+ 
+ ## Prerequisites
+ 
+diff --git a/manifests/jitsi-colibri-ws.yaml b/manifests/jitsi-colibri-ws.yaml
+index 7511141..c542635 100644
+--- a/manifests/jitsi-colibri-ws.yaml
++++ b/manifests/jitsi-colibri-ws.yaml
+@@ -1,3 +1,14 @@
++apiVersion: v1
++kind: ConfigMap
++metadata:
++  name: jitsi-colibri-ws-headers
++  namespace: jitsi
++data:
++  Connection: "upgrade"
++  Host: "$host"
++  Upgrade: "$http_upgrade"
++  X-Forwarded-Proto: "$scheme"
++---
+ apiVersion: networking.k8s.io/v1
+ kind: Ingress
+ metadata:
+@@ -25,4 +36,4 @@ spec:
+   tls:
+     - hosts:
+         - vidcall3-prod.transmedika.co.id
+-      secretName: jitsi-tls
+\ No newline at end of file
++      secretName: jitsi-tls
+diff --git a/manifests/metallb-l2.yaml b/manifests/metallb-l2.yaml
+index 7c8b742..3c921f4 100644
+--- a/manifests/metallb-l2.yaml
++++ b/manifests/metallb-l2.yaml
+@@ -1,15 +1,8 @@
+ apiVersion: metallb.io/v1beta1
+ kind: L2Advertisement
+ metadata:
+-  annotations:
+-    kubectl.kubernetes.io/last-applied-configuration: |
+-      {"apiVersion":"metallb.io/v1beta1","kind":"L2Advertisement","metadata":{"annotations":{},"name":"jitsi-l2","namespace":"metallb-system"},"spec":{"ipAddressPools":["jitsi-pool"]}}
+-  creationTimestamp: "2026-04-30T02:54:56Z"
+-  generation: 1
+   name: jitsi-l2
+   namespace: metallb-system
+-  resourceVersion: "4389"
+-  uid: e29a16e1-62d0-4cf8-a1ae-e95743c675b0
+ spec:
+   ipAddressPools:
+-  - jitsi-pool
++    - jitsi-pool
+diff --git a/manifests/metallb-pool.yaml b/manifests/metallb-pool.yaml
+index 240650b..40ad080 100644
+--- a/manifests/metallb-pool.yaml
++++ b/manifests/metallb-pool.yaml
+@@ -1,17 +1,10 @@
+ apiVersion: metallb.io/v1beta1
+ kind: IPAddressPool
+ metadata:
+-  annotations:
+-    kubectl.kubernetes.io/last-applied-configuration: |
+-      {"apiVersion":"metallb.io/v1beta1","kind":"IPAddressPool","metadata":{"annotations":{},"name":"jitsi-pool","namespace":"metallb-system"},"spec":{"addresses":["192.168.20.190/32"]}}
+-  creationTimestamp: "2026-04-30T02:54:56Z"
+-  generation: 1
+   name: jitsi-pool
+   namespace: metallb-system
+-  resourceVersion: "4388"
+-  uid: 21fa85e6-ff13-4188-8ab1-6bb2a1e7abfc
+ spec:
+   addresses:
+-  - 192.168.20.190/32
++    - 192.168.20.190/32
+   autoAssign: true
+   avoidBuggyIPs: false
+diff --git a/scripts/02-install-jitsi.sh b/scripts/02-install-jitsi.sh
+index c5dab35..5261008 100755
+--- a/scripts/02-install-jitsi.sh
++++ b/scripts/02-install-jitsi.sh
+@@ -22,10 +22,16 @@ else
+     -n ingress-nginx \
+     --create-namespace \
+     --set controller.service.type=LoadBalancer \
+-    --set controller.service.loadBalancerIP=192.168.20.190
++    --set controller.service.loadBalancerIP=192.168.20.190 \
++    --set controller.service.annotations."metallb\\.io/allow-shared-ip"=jitsi-shared
+   kubectl rollout status deployment ingress-nginx-controller -n ingress-nginx --timeout=90s
+ fi
+ 
++kubectl annotate service ingress-nginx-controller \
++  -n ingress-nginx \
++  metallb.io/allow-shared-ip=jitsi-shared \
++  --overwrite
++
+ echo "=== [4/6] Generating TLS certificate ==="
+ if kubectl get secret jitsi-tls -n $NAMESPACE &>/dev/null; then
+   echo "TLS secret already exists, skipping."
+@@ -34,8 +40,8 @@ else
+   openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+     -keyout $TLS_KEY \
+     -out $TLS_CERT \
+-    -subj "/CN=vidcall3.internal" \
+-    -addext "subjectAltName=DNS:vidcall3.internal"
++    -subj "/CN=vidcall3-prod.transmedika.co.id" \
++    -addext "subjectAltName=DNS:vidcall3-prod.transmedika.co.id"
+   kubectl create secret tls jitsi-tls \
+     --cert=$TLS_CERT \
+     --key=$TLS_KEY \
+@@ -50,7 +56,8 @@ else
+   helm install jitsi jitsi/jitsi-meet -n $NAMESPACE -f $VALUES_FILE
+ fi
+ 
+-echo "=== [6/6] Applying HPA ==="
++echo "=== [6/6] Applying supporting manifests ==="
++kubectl apply -f ../manifests/jitsi-colibri-ws.yaml
+ kubectl apply -f ../manifests/jitsi-hpa.yaml
+ 
+ echo "=== Waiting for pods ==="
+@@ -59,5 +66,5 @@ kubectl rollout status deployment jitsi-jitsi-meet-jicofo -n $NAMESPACE --timeou
+ kubectl rollout status deployment jitsi-jitsi-meet-jvb-0 -n $NAMESPACE --timeout=120s
+ 
+ echo ""
+-echo "=== Done! Jitsi is available at https://vidcall3.internal ==="
+-echo "=== Run 03-create-user.sh to add moderator accounts ==="
+\ No newline at end of file
++echo "=== Done! Jitsi is available at https://vidcall3-prod.transmedika.co.id ==="
++echo "=== Run 03-create-user.sh to add moderator accounts ==="
+diff --git a/scripts/04-create-hosts.sh b/scripts/04-create-hosts.sh
+index 28fca88..051b79f 100755
+--- a/scripts/04-create-hosts.sh
++++ b/scripts/04-create-hosts.sh
+@@ -1,9 +1,9 @@
+ #!/bin/bash
+ set -euo pipefail
+ 
+-ENTRY="192.168.20.190  vidcall3.internal"
++ENTRY="192.168.20.190  vidcall3-prod.transmedika.co.id"
+ 
+-if grep -q "vidcall3.internal" /etc/hosts; then
++if grep -q "vidcall3-prod.transmedika.co.id" /etc/hosts; then
+   echo "Host entry already exists, skipping."
+ else
+   echo "$ENTRY" | sudo tee -a /etc/hosts
+@@ -12,4 +12,4 @@ fi
+ 
+ echo ""
+ echo "=== Also add this line to /etc/hosts on any client machine ==="
+-echo "$ENTRY"
+\ No newline at end of file
++echo "$ENTRY"
+diff --git a/values/jitsi-values.yaml b/values/jitsi-values.yaml
+index b598ccf..a147dc3 100644
+--- a/values/jitsi-values.yaml
++++ b/values/jitsi-values.yaml
+@@ -21,6 +21,7 @@ web:
+     kubernetes.io/hostname: srv-deploy-eng
+   ingress:
+     enabled: true
++    ingressClassName: nginx
+     annotations:
+       nginx.ingress.kubernetes.io/ssl-redirect: "true"
+     hosts:
+@@ -52,12 +53,15 @@ jvb:
+   service:
+     enabled: true
+     type: LoadBalancer
++    loadBalancerIP: 192.168.20.190
++    externalTrafficPolicy: Local
+     annotations:
+       metallb.io/allow-shared-ip: "jitsi-shared"
+-    #nodePort: 31829
++    nodePort: 31829
+     extraPorts:
+       - name: colibri-ws
+         port: 9090
++        targetPort: 9090
+         protocol: TCP
+   publicIPs:
+     - 157.15.164.236
+@@ -83,4 +87,4 @@ websockets:
+   colibri:
+     enabled: true
+   xmpp:
+-    enabled: true
+\ No newline at end of file
++    enabled: true
+-- 
+2.43.0

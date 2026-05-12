@@ -1,17 +1,10 @@
 apiVersion: metallb.io/v1beta1
 kind: IPAddressPool
 metadata:
-  annotations:
-    kubectl.kubernetes.io/last-applied-configuration: |
-      {"apiVersion":"metallb.io/v1beta1","kind":"IPAddressPool","metadata":{"annotations":{},"name":"jitsi-pool","namespace":"metallb-system"},"spec":{"addresses":["192.168.20.190/32"]}}
-  creationTimestamp: "2026-04-30T02:54:56Z"
-  generation: 1
   name: jitsi-pool
   namespace: metallb-system
-  resourceVersion: "4388"
-  uid: 21fa85e6-ff13-4188-8ab1-6bb2a1e7abfc
 spec:
   addresses:
-  - 192.168.20.190/32
+    - 192.168.20.190/32
   autoAssign: true
   avoidBuggyIPs: false
