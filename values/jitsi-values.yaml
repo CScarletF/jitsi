@@ -1,4 +1,4 @@
-publicURL: "https://vidcall3.internal"
+publicURL: "https://vidcall3-prod.transmedika.co.id"
 
 enableAuth: true
 enableGuests: true
@@ -24,13 +24,13 @@ web:
     annotations:
       nginx.ingress.kubernetes.io/ssl-redirect: "true"
     hosts:
-      - host: vidcall3.internal
+      - host: vidcall3-prod.transmedika.co.id
         paths:
           - /
     tls:
       - secretName: jitsi-tls
         hosts:
-          - vidcall3.internal
+          - vidcall3-prod.transmedika.co.id
   extraEnvs:
     ENABLE_XMPP_WEBSOCKET: "1"
     ENABLE_COLIBRI_WEBSOCKET: "1"
@@ -51,15 +51,16 @@ jvb:
   UDPPort: 31829
   service:
     enabled: true
-    type: NodePort
-    nodePort: 31829
+    type: LoadBalancer
+    annotations:
+      metallb.io/allow-shared-ip: "jitsi-shared"
+    #nodePort: 31829
     extraPorts:
       - name: colibri-ws
         port: 9090
         protocol: TCP
   publicIPs:
-    - 192.168.20.180
-    - 192.168.20.177
+    - 157.15.164.236
   useNodeIP: false
   stunServers: ""
   useInternalStun: false
@@ -68,7 +69,8 @@ jvb:
   extraEnvs:
     JVB_ENABLE_APIS: "rest,colibri"
     JVB_ENABLE_COLIBRI_WS: "1"
-    JVB_WS_SERVER_ID: "jvb-1"
+    JVB_WS_SERVER_ID: "vidcall3-prod.transmedika.co.id"
+    JVB_WS_DOMAIN: "vidcall3-prod.transmedika.co.id"
   resources:
     requests:
       cpu: 300m

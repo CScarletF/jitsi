@@ -1,0 +1,28 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jitsi-colibri-ws
+  namespace: jitsi
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-set-headers: "jitsi/jitsi-colibri-ws-headers"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: vidcall3-prod.transmedika.co.id
+      http:
+        paths:
+          - path: /colibri-ws
+            pathType: Prefix
+            backend:
+              service:
+                name: jitsi-jitsi-meet-jvb
+                port:
+                  number: 9090
+  tls:
+    - hosts:
+        - vidcall3-prod.transmedika.co.id
+      secretName: jitsi-tls
