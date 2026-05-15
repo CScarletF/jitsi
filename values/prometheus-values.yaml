@@ -1,0 +1,196 @@
+# kube-prometheus-stack Helm values
+# Chart: prometheus-community/kube-prometheus-stack
+# Install: helm install prometheus prometheus-community/kube-prometheus-stack \
+#            -n monitoring --create-namespace \
+#            -f values/prometheus-values.yaml
+#
+# Repo add (if not already present):
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm repo update
+
+# ==============================================================================
+# Kubeadm compatibility
+# kube-scheduler, kube-controller-manager, kube-proxy, and etcd all bind to
+# 127.0.0.1 on kubeadm clusters and are unreachable from pods. Disabling their
+# scrapers prevents noisy connection-refused errors and false-firing alerts.
+# apiserver, kubelet, coredns, and node-exporter are unaffected and scrape fine.
+# ==============================================================================
+kubeScheduler:
+  enabled: false
+
+kubeControllerManager:
+  enabled: false
+
+kubeProxy:
+  enabled: false
+
+kubeEtcd:
+  enabled: false
+
+# ==============================================================================
+# Prometheus
+# ==============================================================================
+prometheus:
+  prometheusSpec:
+    # Scrape all ServiceMonitors and PodMonitors in the cluster regardless of
+    # which Helm release created them. Required so KEDA and Jitsi component
+    # monitors are picked up without label-matching restrictions.
+    serviceMonitorSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    ruleSelectorNilUsesHelmValues: false
+
+    # Retention: 15 days is sufficient for RnD; trim if disk becomes a concern.
+    retention: 15d
+
+    # Storage: local-path on srv-deploy-eng.
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 10Gi
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+    nodeSelector:
+      kubernetes.io/hostname: srv-deploy-eng
+
+    affinity:
+      nodeAffinity:
+        preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+                - key: kubernetes.io/hostname
+                  operator: In
+                  values:
+                    - srv-deploy-eng
+
+# ==============================================================================
+# Alertmanager
+# ==============================================================================
+alertmanager:
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes:
+            - ReadWriteOnce
+          resources:
+            requests:
+              storage: 1Gi
+
+    resources:
+      requests:
+        cpu: 20m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
+    nodeSelector:
+      kubernetes.io/hostname: srv-deploy-eng
+
+# ==============================================================================
+# Grafana
+# ==============================================================================
+grafana:
+  # RnD placeholder — rotate before go-live.
+  adminPassword: "grafana123"
+
+  persistence:
+    enabled: true
+    storageClassName: local-path
+    accessModes:
+      - ReadWriteOnce
+    size: 2Gi
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  nodeSelector:
+    kubernetes.io/hostname: srv-deploy-eng
+
+  # Expose Grafana via ingress on the same nginx controller.
+  # Disabled for now — enable when DNS is active or access via port-forward:
+  #   kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80
+  ingress:
+    enabled: false
+    ingressClassName: nginx
+    annotations:
+      nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      cert-manager.io/cluster-issuer: "letsencrypt-staging"
+    hosts:
+      - vidcall3-prod.transmedika.co.id
+    path: /grafana
+    tls:
+      - secretName: grafana-tls
+        hosts:
+          - vidcall3-prod.transmedika.co.id
+
+# ==============================================================================
+# Prometheus Operator
+# ==============================================================================
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+  nodeSelector:
+    kubernetes.io/hostname: srv-deploy-eng
+
+# ==============================================================================
+# Node exporter — runs on all nodes, exposes host-level metrics.
+# Port changed from default 9100 to 9101 — 9100 is occupied by a Docker-managed
+# node-exporter from the legacy stack on srv-deploy-eng.
+# ==============================================================================
+nodeExporter:
+  enabled: true
+
+prometheus-node-exporter:
+  service:
+    port: 9101
+    targetPort: 9101
+
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+# ==============================================================================
+# kube-state-metrics — exposes Kubernetes object metrics (pod status, etc.)
+# Required for KEDA CPU-based scaling decisions.
+# ==============================================================================
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+  nodeSelector:
+    kubernetes.io/hostname: srv-deploy-eng

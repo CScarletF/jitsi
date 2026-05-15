@@ -10,20 +10,27 @@ xmpp:
   internalMucDomain: internal-muc.meet.jitsi
   guestDomain: guest.meet.jitsi
 
+# ==============================================================================
+# Web
+# ==============================================================================
 web:
   replicaCount: 1
+
   service:
     type: ClusterIP
     port: 80
+
   httpsEnabled: false
   httpRedirect: false
-  nodeSelector:
-    kubernetes.io/hostname: srv-deploy-eng
+
   ingress:
     enabled: true
     ingressClassName: nginx
     annotations:
       nginx.ingress.kubernetes.io/ssl-redirect: "true"
+      # Switch to letsencrypt-prod once DNS and NAT are confirmed active.
+      # Verify staging first: kubectl describe certificate jitsi-tls -n jitsi
+      cert-manager.io/cluster-issuer: "letsencrypt-staging"
     hosts:
       - host: vidcall3-prod.transmedika.co.id
         paths:
@@ -32,29 +39,105 @@ web:
       - secretName: jitsi-tls
         hosts:
           - vidcall3-prod.transmedika.co.id
+
   extraEnvs:
     ENABLE_XMPP_WEBSOCKET: "1"
     ENABLE_COLIBRI_WEBSOCKET: "1"
 
+  nodeSelector:
+    kubernetes.io/hostname: srv-deploy-eng
+
+  # Prefer srv-deploy-eng, fall back to jenkins if resources are tight.
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                  - srv-deploy-eng
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# ==============================================================================
+# Prosody
+# ==============================================================================
 prosody:
   persistence:
     enabled: true
     size: 1Gi
+
   nodeSelector:
     kubernetes.io/hostname: srv-deploy-eng
 
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                  - srv-deploy-eng
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# ==============================================================================
+# Jicofo
+# ==============================================================================
 jicofo:
   xmpp:
     password: "focuspass"
 
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                  - srv-deploy-eng
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 256Mi
+
+# ==============================================================================
+# JVB (JVB-1 — always running, never scaled to zero)
+# ==============================================================================
 jvb:
   replicaCount: 1
   UDPPort: 31829
+
   service:
     enabled: true
     type: LoadBalancer
     loadBalancerIP: 192.168.20.190
-    externalTrafficPolicy: Local
+    # Cluster required for KEDA compatibility — pods may schedule on either node
+    # while MetalLB speaker stays on srv-deploy-eng. Local would drop traffic
+    # arriving at the non-pod node.
+    externalTrafficPolicy: Cluster
     annotations:
       metallb.io/allow-shared-ip: "jitsi-shared"
     nodePort: 31829
@@ -63,18 +146,34 @@ jvb:
         port: 9090
         targetPort: 9090
         protocol: TCP
+
   publicIPs:
     - 157.15.164.236
+
   useNodeIP: false
   stunServers: ""
   useInternalStun: false
+
   xmpp:
     password: "jvbpass123"
+
   extraEnvs:
     JVB_ENABLE_APIS: "rest,colibri"
     JVB_ENABLE_COLIBRI_WS: "1"
     JVB_WS_SERVER_ID: "vidcall3-prod.transmedika.co.id"
     JVB_WS_DOMAIN: "vidcall3-prod.transmedika.co.id"
+
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                  - srv-deploy-eng
+
   resources:
     requests:
       cpu: 300m
@@ -83,6 +182,66 @@ jvb:
       cpu: 2000m
       memory: 2Gi
 
+# ==============================================================================
+# Coturn (STUN/TURN — UDP/3478)
+# ==============================================================================
+coturn:
+  enabled: true
+
+  replicaCount: 1
+
+  staticAuth:
+    # RnD placeholder — production team to rotate before go-live.
+    secret: "turnpass123"
+
+  turn:
+    transport: "udp"
+
+  # TURNS (TURN over TLS/443) disabled until DNS and NAT are active.
+  # When enabling: set turns.certificate.issuerRef.name to letsencrypt-prod
+  # and confirm TCP 443 port-forward does not conflict with ingress-nginx.
+  turns:
+    enabled: false
+
+  service:
+    type: LoadBalancer
+    annotations:
+      # Share .190 with ingress-nginx and JVB — MetalLB allows this via L2.
+      metallb.io/allow-shared-ip: "jitsi-shared"
+    ports:
+      turn: 3478
+      turns: 443
+
+  # Required: coturn cannot reach JVB via public IP on this setup.
+  # Set to Flannel pod CIDR so coturn can relay media to JVB pods directly.
+  allowedPeerIPs:
+    - "10.244.0.0-10.244.255.255"
+
+  nodeSelector:
+    kubernetes.io/hostname: srv-deploy-eng
+
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                  - srv-deploy-eng
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 128Mi
+
+# ==============================================================================
+# WebSockets
+# ==============================================================================
 websockets:
   colibri:
     enabled: true

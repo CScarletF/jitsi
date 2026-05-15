@@ -1,0 +1,54 @@
+# KEDA Helm values
+# Chart: kedacore/keda
+# Install: helm install keda kedacore/keda \
+#            -n keda --create-namespace \
+#            -f values/keda-values.yaml
+#
+# Repo add (if not already present):
+#   helm repo add kedacore https://kedacore.github.io/charts
+#   helm repo update
+
+# ==============================================================================
+# Operator
+# ==============================================================================
+operator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+
+  nodeSelector:
+    kubernetes.io/hostname: srv-deploy-eng
+
+# ==============================================================================
+# Metrics API server — exposes KEDA metrics to the Kubernetes HPA pipeline.
+# ==============================================================================
+metricsServer:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+  nodeSelector:
+    kubernetes.io/hostname: srv-deploy-eng
+
+# ==============================================================================
+# Webhooks
+# ==============================================================================
+webhooks:
+  resources:
+    requests:
+      cpu: 20m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
+
+  nodeSelector:
+    kubernetes.io/hostname: srv-deploy-eng

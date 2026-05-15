@@ -1,0 +1,365 @@
+# JVB-2 — Jitsi Videobridge second instance
+#
+# Managed independently of Helm. KEDA scales this 0→1 based on JVB-1 load.
+# JVB-1 (Helm-managed) is always running. JVB-2 scales up when JVB-1 CPU ≥ 60%
+# and scales down only when JVB-1 CPU < 60% AND JVB-2 active conferences = 0.
+#
+# Prerequisites before applying:
+#   - KEDA installed: helm install keda kedacore/keda -n keda --create-namespace
+#   - Prometheus installed and scraping (serviceMonitorSelectorNilUsesHelmValues: false)
+#   - jitsi-jitsi-meet-jvb-secret exists in jitsi namespace
+#
+# Apply:
+#   kubectl apply -f manifests/jvb-2.yaml
+#
+# Verify:
+#   kubectl get scaledobject -n jitsi
+#   kubectl get deployment jvb-2 -n jitsi
+#   kubectl describe scaledobject jvb-2-scaledobject -n jitsi
+
+# ==============================================================================
+# ConfigMap — JVB-2 environment
+# ==============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: jvb-2-config
+  namespace: jitsi
+data:
+  JVB_WS_SERVER_ID: "vidcall3-prod.transmedika.co.id"
+  JVB_WS_DOMAIN: "vidcall3-prod.transmedika.co.id"
+  JVB_ENABLE_APIS: "rest,colibri"
+  JVB_ENABLE_COLIBRI_WS: "1"
+  ENABLE_COLIBRI_WEBSOCKET: "true"
+  ENABLE_COLIBRI_WEBSOCKET_UNSAFE_REGEX: "1"
+  # XMPP connection — must match prosody and jicofo config
+  XMPP_SERVER: "jitsi-jitsi-meet-prosody.jitsi.svc.cluster.local"
+  XMPP_DOMAIN: "meet.jitsi"
+  XMPP_AUTH_DOMAIN: "auth.meet.jitsi"
+  XMPP_INTERNAL_MUC_DOMAIN: "internal-muc.meet.jitsi"
+  JVB_BREWERY_MUC: "jvbbrewery"
+  # Public IP advertised to clients — same as JVB-1
+  JVB_ADVERTISE_IPS: "157.15.164.236"
+  # UDP port — must be unique per JVB instance
+  JVB_PORT: "31830"
+  # Colibri REST enabled for KEDA metrics polling
+  COLIBRI_REST_ENABLED: "true"
+  TZ: "Asia/Jakarta"
+
+---
+# ==============================================================================
+# Deployment
+# ==============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jvb-2
+  namespace: jitsi
+  labels:
+    app: jvb-2
+    app.kubernetes.io/component: jvb
+    app.kubernetes.io/part-of: jitsi-meet
+spec:
+  # Replica count managed by KEDA ScaledObject below.
+  # Do not set replicas here — KEDA owns this field.
+  selector:
+    matchLabels:
+      app: jvb-2
+  template:
+    metadata:
+      labels:
+        app: jvb-2
+        app.kubernetes.io/component: jvb
+        app.kubernetes.io/part-of: jitsi-meet
+      annotations:
+        # Prometheus scrape annotations for the metrics sidecar
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9888"
+        prometheus.io/path: "/metrics"
+    spec:
+      # Prefer srv-deploy-eng; fall back to jenkins if needed.
+      # Anti-affinity spreads JVB-2 away from JVB-1 when possible.
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 50
+              preference:
+                matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      - srv-deploy-eng
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app.kubernetes.io/component
+                      operator: In
+                      values:
+                        - jvb
+                topologyKey: kubernetes.io/hostname
+
+      containers:
+        # -----------------------------------------------------------------------
+        # Main JVB container
+        # -----------------------------------------------------------------------
+        - name: jvb
+          image: jitsi/jvb:stable-10888
+          envFrom:
+            - configMapRef:
+                name: jvb-2-config
+          env:
+            # XMPP credentials from the existing Helm-managed secret.
+            # JVB-2 uses the same credentials as JVB-1.
+            - name: JVB_AUTH_USER
+              valueFrom:
+                secretKeyRef:
+                  name: jitsi-jitsi-meet-jvb-secret
+                  key: JVB_AUTH_USER
+            - name: JVB_AUTH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: jitsi-jitsi-meet-jvb-secret
+                  key: JVB_AUTH_PASSWORD
+          ports:
+            - name: rtp-udp
+              containerPort: 31830
+              protocol: UDP
+            - name: colibri-ws
+              containerPort: 9090
+              protocol: TCP
+            - name: rest-api
+              containerPort: 8080
+              protocol: TCP
+
+          livenessProbe:
+            httpGet:
+              path: /about/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /about/health
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+            failureThreshold: 3
+
+          resources:
+            requests:
+              cpu: 300m
+              memory: 512Mi
+            limits:
+              cpu: 2000m
+              memory: 2Gi
+
+        # -----------------------------------------------------------------------
+        # Prometheus exporter sidecar
+        # Scrapes /colibri/stats from JVB and exposes as Prometheus metrics.
+        # Required for KEDA to query jvb_conferences metric.
+        # -----------------------------------------------------------------------
+        - name: metrics
+          image: docker.io/systemli/prometheus-jitsi-meet-exporter:1.2.3
+          args:
+            - "-videobridge-url"
+            - "http://localhost:8080/colibri/stats"
+          ports:
+            - name: metrics
+              containerPort: 9888
+              protocol: TCP
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 20m
+              memory: 32Mi
+
+---
+# ==============================================================================
+# Service — UDP media port (LoadBalancer, shared .190 via MetalLB)
+# ==============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: jvb-2-udp
+  namespace: jitsi
+  labels:
+    app: jvb-2
+  annotations:
+    metallb.io/allow-shared-ip: "jitsi-shared"
+spec:
+  type: LoadBalancer
+  loadBalancerIP: 192.168.20.190
+  # Cluster required — KEDA may schedule JVB-2 on either node while MetalLB
+  # speaker stays on srv-deploy-eng. Local would silently drop media traffic.
+  externalTrafficPolicy: Cluster
+  selector:
+    app: jvb-2
+  ports:
+    - name: rtp-udp
+      port: 31830
+      targetPort: 31830
+      nodePort: 31830
+      protocol: UDP
+
+---
+# ==============================================================================
+# Service — internal ports (ClusterIP, not exposed externally)
+# Colibri WebSocket for signalling, REST API for KEDA metrics polling.
+# ==============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: jvb-2-internal
+  namespace: jitsi
+  labels:
+    app: jvb-2
+spec:
+  type: ClusterIP
+  selector:
+    app: jvb-2
+  ports:
+    - name: colibri-ws
+      port: 9090
+      targetPort: 9090
+      protocol: TCP
+    - name: rest-api
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    - name: metrics
+      port: 9888
+      targetPort: 9888
+      protocol: TCP
+
+---
+# ==============================================================================
+# ServiceMonitor — tells Prometheus to scrape the JVB-2 metrics sidecar
+# ==============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: jvb-2-monitor
+  namespace: jitsi
+  labels:
+    app: jvb-2
+    # Label required for kube-prometheus-stack to discover this monitor
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app: jvb-2
+  endpoints:
+    - port: metrics
+      interval: 15s
+      path: /metrics
+
+---
+# ==============================================================================
+# ScaledObject — KEDA scaling logic for JVB-2
+#
+# Scale-up:  JVB-1 CPU utilization ≥ 60%
+# Scale-down: JVB-1 CPU < 60% AND JVB-2 conferences = 0
+#
+# scalingModifiers formula implements AND logic:
+#   - If JVB-1 CPU ≥ 60 → composite metric > 0 → scale up to 1
+#   - If JVB-1 CPU < 60 AND conferences = 0 → composite metric = 0 → scale to 0
+#   - If JVB-1 CPU < 60 BUT conferences > 0 → composite metric = conferences
+#     value keeps replica count at 1 until conferences drain to 0
+#
+# The formula:
+#   jvb1_cpu >= 60 ? 100 : jvb2_conferences * 100
+#
+#   When JVB-1 is hot: returns 100 → above target of 1 → scale up
+#   When JVB-1 is cool and conferences = 0: returns 0 → scale to zero
+#   When JVB-1 is cool but conferences > 0: returns >0 → stays at 1
+# ==============================================================================
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: jvb-2-scaledobject
+  namespace: jitsi
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: jvb-2
+
+  minReplicaCount: 0   # Allow scale to zero
+  maxReplicaCount: 1   # JVB-2 is a single standby instance
+
+  # How often KEDA polls metrics (seconds)
+  pollingInterval: 30
+
+  # How long to wait after last scale event before scaling down (seconds).
+  # 5 minutes gives active calls time to naturally end before scale-down fires.
+  cooldownPeriod: 300
+
+  advanced:
+    scalingModifiers:
+      # Composite metric target — scale when value > 1
+      target: "1"
+      metricType: "AverageValue"
+      # Formula implements AND gate:
+      # - jvb1_cpu high → scale up regardless of conferences
+      # - jvb1_cpu low AND conferences = 0 → scale to zero
+      # - jvb1_cpu low BUT conferences > 0 → hold at 1
+      formula: "jvb1_cpu >= 60 ? 100 : jvb2_conferences * 100"
+
+    horizontalPodAutoscalerConfig:
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 60
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 60
+        scaleDown:
+          # Long stabilization window prevents flapping.
+          # Combined with formula, JVB-2 only scales down when it has been
+          # idle (conferences = 0) for this entire window.
+          stabilizationWindowSeconds: 300
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 120
+
+  triggers:
+    # Trigger 1: JVB-1 CPU utilization
+    # Queries Prometheus for JVB-1 pod CPU as a percentage (0-100 scale).
+    - type: prometheus
+      name: jvb1_cpu
+      metadata:
+        serverAddress: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
+        # CPU usage rate for JVB-1 pod, normalized to percentage.
+        # Adjust the pod label selector if the JVB-1 pod name pattern changes.
+        query: |
+          rate(container_cpu_usage_seconds_total{
+            namespace="jitsi",
+            pod=~"jitsi-jitsi-meet-jvb-0-.*",
+            container="jvb"
+          }[2m]) * 100
+        threshold: "60"
+
+    # Trigger 2: JVB-2 active conferences
+    # Queries Prometheus for the conferences metric exposed by the JVB-2
+    # metrics sidecar. Returns 0 when JVB-2 is idle or not yet running.
+    - type: prometheus
+      name: jvb2_conferences
+      metadata:
+        serverAddress: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
+        query: |
+          jitsi_conferences{
+            namespace="jitsi",
+            pod=~"jvb-2-.*"
+          }
+        threshold: "1"
+        # When JVB-2 is at 0 replicas the metric is absent from Prometheus.
+        # Treat absence as 0 so KEDA does not enter error state.
+        ignoreNullValues: "true"

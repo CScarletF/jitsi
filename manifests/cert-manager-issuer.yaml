@@ -1,0 +1,55 @@
+# cert-manager ClusterIssuer — Let's Encrypt
+#
+# DO NOT APPLY until both of the following are confirmed:
+#   1. DNS: vidcall3-prod.transmedika.co.id resolves to 157.15.164.236
+#   2. NAT: router forwards TCP 80 from 157.15.164.236 to 192.168.20.190
+#
+# HTTP-01 challenge requires Let's Encrypt to reach:
+#   http://vidcall3-prod.transmedika.co.id/.well-known/acme-challenge/<token>
+# That path must route all the way to ingress-nginx on .190 port 80.
+#
+# Apply with:
+#   kubectl apply -f manifests/cert-manager-issuer.yaml
+#
+# Verify issuance after apply:
+#   kubectl describe clusterissuer letsencrypt-prod
+#   kubectl describe certificate jitsi-tls -n jitsi
+#   kubectl describe certificaterequest -n jitsi
+# ---------------------------------------------------------------------------
+
+# Staging issuer — use this first to validate the pipeline without hitting
+# Let's Encrypt rate limits. Staging certs are untrusted by browsers but
+# the issuance flow is identical.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-staging
+spec:
+  acme:
+    server: https://acme-staging-v02.api.letsencrypt.org/directory
+    email: coldscarletflame@gmail.com
+    privateKeySecretRef:
+      name: letsencrypt-staging-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: nginx
+
+---
+
+# Production issuer — apply and switch to this only after staging succeeds.
+# Rate limit: 5 duplicate certificates per week per domain.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: letsencrypt-prod
+spec:
+  acme:
+    server: https://acme-v02.api.letsencrypt.org/directory
+    email: coldscarletflame@gmail.com
+    privateKeySecretRef:
+      name: letsencrypt-prod-key
+    solvers:
+      - http01:
+          ingress:
+            ingressClassName: nginx
