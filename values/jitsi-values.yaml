@@ -43,6 +43,8 @@ web:
   extraEnvs:
     ENABLE_XMPP_WEBSOCKET: "1"
     ENABLE_COLIBRI_WEBSOCKET: "1"
+    COLIBRI_WEBSOCKET_REGEX: ".*"
+    JVB_PREFER_SCTP: "false"
 
   nodeSelector:
     kubernetes.io/hostname: srv-deploy-eng
