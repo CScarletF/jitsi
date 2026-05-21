@@ -1,7 +1,7 @@
 # Jitsi Meet on Kubernetes
 
-Internal Jitsi Meet deployment on a 2-node Kubernetes cluster for hospital use.
-Currently operational locally. External connectivity pending DNS and NAT activation.
+Hospital-grade Jitsi Meet deployment on a 2-node Kubernetes cluster.
+**Status: Locally operational. External access infrastructure confirmed ready — pending DNS propagation.**
 
 ## Cluster
 
@@ -12,55 +12,59 @@ Currently operational locally. External connectivity pending DNS and NAT activat
 
 - CNI: Flannel (`10.244.0.0/16` pod CIDR)
 - Storage: local-path-provisioner (node-local, default StorageClass)
-- LoadBalancer: MetalLB L2 mode, single IP `192.168.20.190`
+- LoadBalancer: MetalLB L2 mode, single VIP `192.168.20.190`
 - LoadBalancer IP shared by: ingress-nginx (TCP 80/443), JVB-1 (UDP 31829), JVB-2 (UDP 31830), coturn (UDP 3478)
-- Access: `https://vidcall3-prod.transmedika.co.id` (local /etc/hosts until DNS is active)
+- Local access: `https://vidcall3-prod.transmedika.co.id` via `/etc/hosts → 192.168.20.190`
 - Auth: internal Prosody users only
 
-## Public Network (pending)
+## Public Network
 
-| Resource  | Value                          | Status   |
-|-----------|--------------------------------|----------|
-| Public IP | 157.15.164.236                 | Active   |
-| Domain    | vidcall3-prod.transmedika.co.id | DNS pending |
-| NAT       | 157.15.164.236 → 192.168.20.190 | Pending  |
+| Resource  | Value                           | Status             |
+|-----------|---------------------------------|--------------------|
+| Public IP | 157.15.164.236                  | ✅ Active, routable |
+| Public IP | 157.15.164.66                   | ✅ Active (shared, used by other services) |
+| Domain    | vidcall3-prod.transmedika.co.id | ⏳ DNS pending — must point to 157.15.164.236 |
+| NAT       | 157.15.164.236 → 192.168.20.190 | ✅ Configured on Mikrotik |
 
-Port forwards requested (router → 192.168.20.190):
+### Port Forward Status (Mikrotik → 192.168.20.190)
 
-| Port       | Protocol | Purpose              |
-|------------|----------|----------------------|
-| 80         | TCP      | Let's Encrypt HTTP-01 |
-| 443        | TCP      | HTTPS + WSS          |
-| 31829      | UDP      | JVB-1 media          |
-| 31830      | UDP      | JVB-2 media          |
-| 3478       | UDP      | TURN                 |
+| Port  | Protocol | Purpose               | Status               |
+|-------|----------|-----------------------|----------------------|
+| 80    | TCP      | Let's Encrypt HTTP-01 | ✅ Open              |
+| 443   | TCP      | HTTPS + WSS           | ✅ Open              |
+| 31829 | UDP      | JVB-1 media           | ✅ Open\|filtered (correct for UDP) |
+| 31830 | UDP      | JVB-2 media           | ⏳ Rule exists, not yet verified |
+| 3478  | UDP      | TURN                  | ⏳ Rule exists, not yet verified |
+
+> **Note:** UDP ports will always show as "open|filtered" on port scanners — this is correct behavior.
+> True UDP connectivity can only be verified with an active WebRTC call or `nc -u`.
 
 ## Architecture
 
 ### Infrastructure
-- **MetalLB** — L2 mode, single VIP `.190`, ARP failover between nodes
+- **MetalLB** — L2 mode, single VIP `.190`, ARP answered by whichever node is MetalLB speaker
 - **ingress-nginx** — TCP 80/443, LoadBalancer on `.190`
-- **cert-manager** — Let's Encrypt HTTP-01 (issuer applied when DNS is live)
+- **cert-manager** — Let's Encrypt HTTP-01 issuer configured, **not yet applied** (waiting on DNS)
 - **Prometheus + Grafana + Alertmanager** — `monitoring` namespace, kube-prometheus-stack
 - **KEDA** — event-driven autoscaling for JVB-2
 
 ### Jitsi Components (`jitsi` namespace)
 
-| Component | Managed by | Replicas      | Notes                          |
-|-----------|------------|---------------|--------------------------------|
-| web       | Helm       | 1             | Stateless, scalable            |
-| prosody   | Helm       | 1 (fixed)     | Persistent storage, SPOF       |
-| jicofo    | Helm       | 1 (fixed)     | SPOF, acceptable for RnD       |
-| coturn    | Helm       | 1             | STUN/TURN UDP/3478             |
-| jvb-1     | Helm       | 1 (always up) | Primary bridge, never scaled down |
-| jvb-2     | Raw manifest + KEDA | 0→1  | Scales up when JVB-1 CPU ≥ 60% |
+| Component | Managed by          | Replicas | Notes                              |
+|-----------|---------------------|----------|------------------------------------|
+| web       | Helm                | 1        | Stateless, scalable                |
+| prosody   | Helm                | 1 (fixed)| Persistent storage, SPOF           |
+| jicofo    | Helm                | 1 (fixed)| SPOF, acceptable for RnD           |
+| coturn    | Helm                | 1        | STUN/TURN UDP/3478                 |
+| jvb-1     | Helm                | 1        | Primary bridge, never scaled down  |
+| jvb-2     | Raw manifest + KEDA | 0→1      | Scales up when JVB-1 CPU ≥ 60%    |
 
 ### JVB Scaling Logic (KEDA)
 - JVB-1 is always running — never scaled to zero
 - JVB-2 scales **up** when JVB-1 CPU ≥ 60%
 - JVB-2 scales **down** only when JVB-1 CPU < 60% **AND** JVB-2 active conferences = 0
 - AND logic implemented via KEDA `scalingModifiers` formula
-- When JVB-2 is at 0 replicas, absent Prometheus metric is treated as 0 conferences (`ignoreNullValues: true`)
+- When JVB-2 is at 0 replicas, absent Prometheus metric is treated as 0 (`ignoreNullValues: true`)
 - Scale-down stabilization window: 300s (prevents flapping)
 
 ### Node Placement
@@ -87,13 +91,13 @@ jitsi         jvb-2-internal               ClusterIP     -               9090/TC
 
 ## Helm Releases
 
-| Release   | Namespace    | Chart                                    |
-|-----------|--------------|------------------------------------------|
-| ingress-nginx | ingress-nginx | ingress-nginx/ingress-nginx           |
-| jitsi     | jitsi        | jitsi/jitsi-meet v2.16.0               |
-| cert-manager | cert-manager | jetstack/cert-manager                 |
-| prometheus | monitoring   | prometheus-community/kube-prometheus-stack |
-| keda      | keda         | kedacore/keda                           |
+| Release       | Namespace     | Chart                                        |
+|---------------|---------------|----------------------------------------------|
+| ingress-nginx | ingress-nginx | ingress-nginx/ingress-nginx                  |
+| jitsi         | jitsi         | jitsi/jitsi-meet v2.16.0                    |
+| cert-manager  | cert-manager  | jetstack/cert-manager                        |
+| prometheus    | monitoring    | prometheus-community/kube-prometheus-stack   |
+| keda          | keda          | kedacore/keda                                |
 
 ## Fresh Install (in order)
 
@@ -131,7 +135,7 @@ bash 02-install-jitsi.sh
 # 7. Create first moderator user
 bash 03-create-user.sh admin yourpassword
 
-# 8. Add local /etc/hosts entry
+# 8. Add local /etc/hosts entry (until DNS is live)
 bash 04-create-hosts.sh
 ```
 
@@ -156,19 +160,35 @@ kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80
 # Open http://localhost:3000 — admin / grafana123
 ```
 
-## Enabling External Access (when DNS and NAT are active)
+## Enabling External Access (DNS + cert-manager cutover)
 
-1. Confirm DNS resolves: `dig vidcall3-prod.transmedika.co.id`
-2. Confirm TCP 80 reaches ingress: `curl http://vidcall3-prod.transmedika.co.id`
-3. Apply cert-manager issuers:
+> Prerequisites confirmed: TCP 80/443 open, UDP 31829 open|filtered, NAT `.236 → .190` active.
+> Only remaining blocker is DNS propagation.
+
+1. Confirm public DNS resolves correctly:
+   ```bash
+   dig vidcall3-prod.transmedika.co.id @8.8.8.8
+   # Must return 157.15.164.236
+   ```
+
+2. Confirm HTTP-01 challenge path is reachable:
+   ```bash
+   curl http://vidcall3-prod.transmedika.co.id
+   # Must reach ingress-nginx (any response is fine, including 404)
+   ```
+
+3. Apply cert-manager issuers (staging first):
    ```bash
    kubectl apply -f manifests/cert-manager-issuer.yaml
    ```
-4. Verify staging certificate issues:
+
+4. Verify staging certificate issues (allow 2–5 minutes):
    ```bash
    kubectl describe certificate jitsi-tls -n jitsi
+   kubectl describe certificaterequest -n jitsi
    ```
-5. Once staging succeeds, switch to prod issuer in `jitsi-values.yaml`:
+
+5. Once staging succeeds, switch to prod issuer in `values/jitsi-values.yaml`:
    ```yaml
    cert-manager.io/cluster-issuer: "letsencrypt-prod"
    ```
@@ -177,11 +197,29 @@ kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80
    helm upgrade jitsi jitsi/jitsi-meet -n jitsi -f values/jitsi-values.yaml
    ```
 
+6. Enable Grafana ingress in `values/prometheus-values.yaml` (currently disabled):
+   ```yaml
+   grafana:
+     ingress:
+       enabled: true
+   ```
+
+7. Enable TURNS in `values/jitsi-values.yaml` (currently disabled):
+   ```yaml
+   coturn:
+     turns:
+       enabled: true
+   ```
+
 ## Secrets
 
-- TLS cert: managed by cert-manager, stored in `jitsi-tls` secret in `jitsi` namespace
+- TLS cert: currently a self-signed placeholder; will be replaced by cert-manager on DNS cutover
 - JVB credentials: `jitsi-jitsi-meet-jvb-secret` (managed by Helm)
 - Jicofo credentials: `jitsi-jitsi-meet-jicofo-secret` (managed by Helm)
+- Grafana password: `grafana123` — **rotate before go-live**
+- TURN secret: `turnpass123` — **rotate before go-live**
+- Jicofo XMPP password: `focuspass` — **rotate before go-live**
+- JVB XMPP password: `jvbpass123` — **rotate before go-live**
 - Never commit the `secrets/` directory contents to Git
 
 ## Snapshots
@@ -224,7 +262,8 @@ jitsi-helm-local/
 ## Known Limitations (RnD)
 
 - Prosody and jicofo are single-replica SPOFs — acceptable for RnD, revisit for production HA
-- Passwords in values files are placeholders — production team must rotate all credentials before go-live
+- All passwords in values files are placeholders — production team must rotate all credentials before go-live
 - TURNS (TURN over TLS/443) disabled — enable in `jitsi-values.yaml` once DNS is active
 - Grafana ingress disabled — access via port-forward until DNS is active
 - `jenkins` kernel is significantly older (5.15.0-60) than `srv-deploy-eng` (5.15.0-174) — update before production
+- Self-signed TLS cert currently in use — will be replaced automatically by cert-manager once DNS is live
