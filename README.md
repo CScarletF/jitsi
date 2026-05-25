@@ -1,7 +1,7 @@
 # Jitsi Meet on Kubernetes
 
 Hospital-grade Jitsi Meet deployment on a 2-node Kubernetes cluster.
-**Status: Locally operational. External access infrastructure confirmed ready — pending DNS propagation.**
+**Status: Fully operational. External access confirmed working. Multi-party SFU calls functional.**
 
 ## Cluster
 
@@ -14,29 +14,28 @@ Hospital-grade Jitsi Meet deployment on a 2-node Kubernetes cluster.
 - Storage: local-path-provisioner (node-local, default StorageClass)
 - LoadBalancer: MetalLB L2 mode, single VIP `192.168.20.190`
 - LoadBalancer IP shared by: ingress-nginx (TCP 80/443), JVB-1 (UDP 31829), JVB-2 (UDP 31830), coturn (UDP 3478)
-- Local access: `https://vidcall3-prod.transmedika.co.id` via `/etc/hosts → 192.168.20.190`
-- Auth: internal Prosody users only
+- External access: `https://vidcall3-prod.transmedika.co.id` — DNS live, TLS via Let's Encrypt
 
 ## Public Network
 
-| Resource  | Value                           | Status             |
-|-----------|---------------------------------|--------------------|
+| Resource  | Value                           | Status |
+|-----------|---------------------------------|--------|
 | Public IP | 157.15.164.236                  | ✅ Active, routable |
 | Public IP | 157.15.164.66                   | ✅ Active (shared, used by other services) |
-| Domain    | vidcall3-prod.transmedika.co.id | ⏳ DNS pending — must point to 157.15.164.236 |
+| Domain    | vidcall3-prod.transmedika.co.id | ✅ DNS live → 157.15.164.236 |
 | NAT       | 157.15.164.236 → 192.168.20.190 | ✅ Configured on Mikrotik |
 
 ### Port Forward Status (Mikrotik → 192.168.20.190)
 
-| Port  | Protocol | Purpose               | Status               |
-|-------|----------|-----------------------|----------------------|
-| 80    | TCP      | Let's Encrypt HTTP-01 | ✅ Open              |
-| 443   | TCP      | HTTPS + WSS           | ✅ Open              |
-| 31829 | UDP      | JVB-1 media           | ✅ Open\|filtered (correct for UDP) |
-| 31830 | UDP      | JVB-2 media           | ⏳ Rule exists, not yet verified |
-| 3478  | UDP      | TURN                  | ⏳ Rule exists, not yet verified |
+| Port  | Protocol | Purpose               | Status |
+|-------|----------|-----------------------|--------|
+| 80    | TCP      | Let's Encrypt HTTP-01 | ✅ Open |
+| 443   | TCP      | HTTPS + WSS           | ✅ Open |
+| 31829 | UDP      | JVB-1 media           | ✅ Verified |
+| 31830 | UDP      | JVB-2 media           | ✅ Forwarded |
+| 3478  | UDP      | TURN                  | ✅ Forwarded |
 
-> **Note:** UDP ports will always show as "open|filtered" on port scanners — this is correct behavior.
+> UDP ports will always show as "open|filtered" on port scanners — this is correct behavior.
 > True UDP connectivity can only be verified with an active WebRTC call or `nc -u`.
 
 ## Architecture
@@ -44,20 +43,36 @@ Hospital-grade Jitsi Meet deployment on a 2-node Kubernetes cluster.
 ### Infrastructure
 - **MetalLB** — L2 mode, single VIP `.190`, ARP answered by whichever node is MetalLB speaker
 - **ingress-nginx** — TCP 80/443, LoadBalancer on `.190`
-- **cert-manager** — Let's Encrypt HTTP-01 issuer configured, **not yet applied** (waiting on DNS)
+- **cert-manager** — Let's Encrypt HTTP-01, `letsencrypt-prod` issuer active
 - **Prometheus + Grafana + Alertmanager** — `monitoring` namespace, kube-prometheus-stack
 - **KEDA** — event-driven autoscaling for JVB-2
 
 ### Jitsi Components (`jitsi` namespace)
 
-| Component | Managed by          | Replicas | Notes                              |
-|-----------|---------------------|----------|------------------------------------|
-| web       | Helm                | 1        | Stateless, scalable                |
-| prosody   | Helm                | 1 (fixed)| Persistent storage, SPOF           |
-| jicofo    | Helm                | 1 (fixed)| SPOF, acceptable for RnD           |
-| coturn    | Helm                | 1        | STUN/TURN UDP/3478                 |
-| jvb-1     | Helm                | 1        | Primary bridge, never scaled down  |
-| jvb-2     | Raw manifest + KEDA | 0→1      | Scales up when JVB-1 CPU ≥ 60%    |
+| Component | Managed by          | Replicas | Notes |
+|-----------|---------------------|----------|-------|
+| web       | Helm                | 1        | Stateless, scalable |
+| prosody   | Helm                | 1 (fixed)| Persistent storage, SPOF |
+| jicofo    | Helm                | 1 (fixed)| SPOF, acceptable for RnD |
+| coturn    | Helm                | 1        | STUN/TURN UDP/3478 |
+| jvb-1     | Helm                | 1        | Primary bridge, never scaled down |
+| jvb-2     | Raw manifest + KEDA | 0→1      | Scales up when JVB-1 CPU ≥ 60% |
+
+### Media Path (How a Call Works)
+
+1. Client loads the web UI and connects to prosody via XMPP WebSocket (`wss://.../xmpp-websocket`)
+2. Client sends a conference allocation IQ to jicofo (`focus.meet.jitsi`)
+3. Jicofo selects a JVB and returns bridge info
+4. Client opens a Colibri WebSocket to JVB (`wss://.../colibri-ws`) for signalling
+5. Client sends/receives RTP media directly to JVB via UDP (port 31829/31830)
+6. If UDP is blocked, coturn relays media via TURN (UDP 3478)
+7. TURN credentials are delivered per-session by prosody's `mod_external_services` — not hardcoded in config.js
+
+### TURN Credential Pipeline
+Credentials are **not** injected into `config.js`. They are delivered dynamically to each client via XMPP when they join a room, using prosody's `mod_external_services`. Coturn authenticates using HMAC shared secret (`turnpass123`). The `jitsi-jitsi-meet-prosody-coturn` ConfigMap carries `TURN_HOST`, `TURN_PORT`, `TURN_TRANSPORT`, and `STUN_HOST` into the prosody pod as environment variables.
+
+### Colibri WebSocket Ingress
+The `manifests/jitsi-colibri-ws.yaml` ingress routes `/colibri-ws` to JVB's port 9090. The `configuration-snippet` sets `Upgrade`, `Connection`, and `X-Forwarded-Proto` headers manually — **do not add `proxy_set_header Host`** as nginx-ingress already sets it and a duplicate Host header causes Jetty (JVB's HTTP server) to reject the WebSocket upgrade, breaking the bridge channel for all participants.
 
 ### JVB Scaling Logic (KEDA)
 - JVB-1 is always running — never scaled to zero
@@ -66,6 +81,9 @@ Hospital-grade Jitsi Meet deployment on a 2-node Kubernetes cluster.
 - AND logic implemented via KEDA `scalingModifiers` formula
 - When JVB-2 is at 0 replicas, absent Prometheus metric is treated as 0 (`ignoreNullValues: true`)
 - Scale-down stabilization window: 300s (prevents flapping)
+
+### Coturn Peer IP Policy
+The Helm chart hardcodes `denied-peer-ip=10.0.0.0-10.255.255.255` before rendering `allowed-peer-ip` from `allowedPeerIPs`. Coturn evaluates `allowed-peer-ip` as an override to `denied-peer-ip`, so the `allowedPeerIPs: ["10.244.0.0-10.244.255.255"]` entry in `jitsi-values.yaml` correctly permits relay to JVB pods despite the broad deny. JVB pods run in `10.244.0.0/16` (Flannel CIDR).
 
 ### Node Placement
 - All components prefer `srv-deploy-eng` via `preferredDuringSchedulingIgnoredDuringExecution`
@@ -83,6 +101,24 @@ jitsi         jitsi-jitsi-meet-coturn      LoadBalancer  192.168.20.190  3478/UD
 jitsi         jvb-2-internal               ClusterIP     -               9090/TCP, 8080/TCP, 9888/TCP
 ```
 
+## Authentication Modes
+
+### Current: Auth required to create rooms (guests can join)
+`enableAuth: true` + `enableGuests: true` — a prosody user must join first to create the room.
+Guests connecting without credentials are held until a moderator arrives.
+
+### Open: Anyone can create rooms (no login required)
+Set `enableAuth: false` in `jitsi-values.yaml`, then upgrade:
+```bash
+helm upgrade jitsi jitsi/jitsi-meet -n jitsi -f values/jitsi-values.yaml
+```
+With auth disabled, all participants are treated as equal — no moderator concept. Anyone who reaches the URL can create and join rooms. Suitable for internal/trusted networks. Do not use on a publicly routable domain without additional access controls.
+
+### Managing Prosody Users (when auth is enabled)
+```bash
+bash scripts/03-create-user.sh username password
+```
+
 ## Prerequisites
 
 - Kubernetes 1.35+ with kubeadm
@@ -91,13 +127,13 @@ jitsi         jvb-2-internal               ClusterIP     -               9090/TC
 
 ## Helm Releases
 
-| Release       | Namespace     | Chart                                        |
-|---------------|---------------|----------------------------------------------|
-| ingress-nginx | ingress-nginx | ingress-nginx/ingress-nginx                  |
-| jitsi         | jitsi         | jitsi/jitsi-meet v2.16.0                    |
-| cert-manager  | cert-manager  | jetstack/cert-manager                        |
-| prometheus    | monitoring    | prometheus-community/kube-prometheus-stack   |
-| keda          | keda          | kedacore/keda                                |
+| Release       | Namespace     | Chart |
+|---------------|---------------|-------|
+| ingress-nginx | ingress-nginx | ingress-nginx/ingress-nginx |
+| jitsi         | jitsi         | jitsi/jitsi-meet v2.16.0 |
+| cert-manager  | cert-manager  | jetstack/cert-manager |
+| prometheus    | monitoring    | prometheus-community/kube-prometheus-stack |
+| keda          | keda          | kedacore/keda |
 
 ## Fresh Install (in order)
 
@@ -132,17 +168,14 @@ helm install keda kedacore/keda \
 # 6. Jitsi
 bash 02-install-jitsi.sh
 
-# 7. Create first moderator user
+# 7. Apply Colibri WebSocket ingress
+kubectl apply -f manifests/jitsi-colibri-ws.yaml
+
+# 8. Apply JVB-2 + KEDA ScaledObject
+kubectl apply -f manifests/jvb-2.yaml
+
+# 9. Create first moderator user (if enableAuth: true)
 bash 03-create-user.sh admin yourpassword
-
-# 8. Add local /etc/hosts entry (until DNS is live)
-bash 04-create-hosts.sh
-```
-
-## Adding Moderator Users
-
-```bash
-bash scripts/03-create-user.sh username password
 ```
 
 ## Upgrading Jitsi Config
@@ -153,67 +186,22 @@ helm upgrade jitsi jitsi/jitsi-meet \
   -f values/jitsi-values.yaml
 ```
 
-## Accessing Grafana (local, no DNS)
+After any upgrade that touches jicofo or prosody config, restart both to avoid XMPP session conflicts:
+```bash
+kubectl rollout restart deployment/jitsi-jitsi-meet-jicofo -n jitsi
+kubectl rollout restart statefulset/jitsi-jitsi-meet-prosody -n jitsi
+```
+
+## Accessing Grafana
 
 ```bash
 kubectl port-forward -n monitoring svc/prometheus-grafana 3000:80
 # Open http://localhost:3000 — admin / grafana123
 ```
 
-## Enabling External Access (DNS + cert-manager cutover)
-
-> Prerequisites confirmed: TCP 80/443 open, UDP 31829 open|filtered, NAT `.236 → .190` active.
-> Only remaining blocker is DNS propagation.
-
-1. Confirm public DNS resolves correctly:
-   ```bash
-   dig vidcall3-prod.transmedika.co.id @8.8.8.8
-   # Must return 157.15.164.236
-   ```
-
-2. Confirm HTTP-01 challenge path is reachable:
-   ```bash
-   curl http://vidcall3-prod.transmedika.co.id
-   # Must reach ingress-nginx (any response is fine, including 404)
-   ```
-
-3. Apply cert-manager issuers (staging first):
-   ```bash
-   kubectl apply -f manifests/cert-manager-issuer.yaml
-   ```
-
-4. Verify staging certificate issues (allow 2–5 minutes):
-   ```bash
-   kubectl describe certificate jitsi-tls -n jitsi
-   kubectl describe certificaterequest -n jitsi
-   ```
-
-5. Once staging succeeds, switch to prod issuer in `values/jitsi-values.yaml`:
-   ```yaml
-   cert-manager.io/cluster-issuer: "letsencrypt-prod"
-   ```
-   Then upgrade:
-   ```bash
-   helm upgrade jitsi jitsi/jitsi-meet -n jitsi -f values/jitsi-values.yaml
-   ```
-
-6. Enable Grafana ingress in `values/prometheus-values.yaml` (currently disabled):
-   ```yaml
-   grafana:
-     ingress:
-       enabled: true
-   ```
-
-7. Enable TURNS in `values/jitsi-values.yaml` (currently disabled):
-   ```yaml
-   coturn:
-     turns:
-       enabled: true
-   ```
-
 ## Secrets
 
-- TLS cert: currently a self-signed placeholder; will be replaced by cert-manager on DNS cutover
+- TLS cert: managed by cert-manager, auto-renewed via Let's Encrypt
 - JVB credentials: `jitsi-jitsi-meet-jvb-secret` (managed by Helm)
 - Jicofo credentials: `jitsi-jitsi-meet-jicofo-secret` (managed by Helm)
 - Grafana password: `grafana123` — **rotate before go-live**
@@ -231,19 +219,33 @@ mkdir -p ~/jitsi-snapshots/jitsi-k8s-<description>-$(date +%Y-%m-%d)
 cp -r ~/jitsi-helm-local/* ~/jitsi-snapshots/jitsi-k8s-<description>-$(date +%Y-%m-%d)/
 ```
 
+## Operational Notes
+
+**Jicofo XMPP conflict loop** — if jicofo loses its prosody connection and enters a `conflict: Replaced by new connection` loop, a rollout restart resolves it:
+```bash
+kubectl rollout restart deployment/jitsi-jitsi-meet-jicofo -n jitsi
+```
+This can happen when prosody is restarted independently while jicofo keeps running. Always restart jicofo after restarting prosody.
+
+**AV1 Dependency Descriptor warnings in JVB logs** — clients sending AV1 video may produce a flood of `Could not parse AV1 Dependency Descriptor` warnings. This is a known JVB issue with certain Chrome/Android versions and does not affect call quality. Codec preference order is `av1,vp9,vp8,h264` — AV1 can be demoted if the noise is excessive.
+
+**Colibri WebSocket "bridge channel is down"** — caused by a duplicate `Host` header being sent to JVB's Jetty server. Do not add `proxy_set_header Host` to the Colibri WS ingress `configuration-snippet`; nginx-ingress sets it automatically.
+
 ## Repository Structure
 
 ```
-jitsi-helm-local/
+jitsi-helm/
 ├── .gitignore
 ├── README.md
-├── jitsi-external-availability.patch   (kept for history)
+├── backup/
+│   ├── helm-values-working.yaml        (pre-external-access baseline)
+│   └── jitsi-all-working.yaml
 ├── manifests/
 │   ├── namespace.yaml
 │   ├── metallb-pool.yaml
 │   ├── metallb-l2.yaml
-│   ├── cert-manager-issuer.yaml        (apply when DNS is live)
-│   ├── jitsi-colibri-ws.yaml           (Colibri WebSocket ingress)
+│   ├── cert-manager-issuer.yaml        (letsencrypt-prod issuer — already applied)
+│   ├── jitsi-colibri-ws.yaml           (Colibri WebSocket ingress — must be applied separately)
 │   └── jvb-2.yaml                      (JVB-2 Deployment + Services + KEDA ScaledObject)
 ├── values/
 │   ├── jitsi-values.yaml
@@ -263,7 +265,7 @@ jitsi-helm-local/
 
 - Prosody and jicofo are single-replica SPOFs — acceptable for RnD, revisit for production HA
 - All passwords in values files are placeholders — production team must rotate all credentials before go-live
-- TURNS (TURN over TLS/443) disabled — enable in `jitsi-values.yaml` once DNS is active
-- Grafana ingress disabled — access via port-forward until DNS is active
+- TURNS (TURN over TLS/443) disabled — enable `coturn.turns.enabled: true` in `jitsi-values.yaml` when ready; confirm TCP 443 does not conflict with ingress-nginx
+- Grafana ingress disabled — access via port-forward only
 - `jenkins` kernel is significantly older (5.15.0-60) than `srv-deploy-eng` (5.15.0-174) — update before production
-- Self-signed TLS cert currently in use — will be replaced automatically by cert-manager once DNS is live
+- JVB-2 Colibri WS ingress routes only to JVB-1's service — if JVB-2 is actively handling a conference when KEDA scales it up, clients assigned to JVB-2 will not have a working Colibri WS path. This is acceptable while call volume is low enough that JVB-2 never scales up.

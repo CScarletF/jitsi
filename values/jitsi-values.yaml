@@ -1,7 +1,7 @@
 publicURL: "https://vidcall3-prod.transmedika.co.id"
 turnHost: "157.15.164.236"
 
-enableAuth: true
+enableAuth: false
 enableGuests: true
 
 xmpp:
@@ -47,6 +47,14 @@ web:
     COLIBRI_WEBSOCKET_REGEX: ".*"
     JVB_PREFER_SCTP: "false"
 
+  extraVolumes:
+    - name: watermark
+      configMap:
+        name: jitsi-watermark
+  extraVolumeMounts:
+    - name: watermark
+      mountPath: /usr/share/jitsi-meet/images/watermark.svg
+      subPath: watermark.svg
 
   nodeSelector:
     kubernetes.io/hostname: srv-deploy-eng
@@ -78,6 +86,9 @@ prosody:
   persistence:
     enabled: true
     size: 1Gi
+  
+  extraEnvs:
+    ENABLE_AUTH: "0"
 
   nodeSelector:
     kubernetes.io/hostname: srv-deploy-eng
