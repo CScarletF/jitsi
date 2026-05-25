@@ -34,6 +34,10 @@ spec:
       - http01:
           ingress:
             ingressClassName: nginx
+            ingressTemplate:
+              metadata:
+                annotations:
+                  nginx.ingress.kubernetes.io/ssl-redirect: "false"
 
 ---
 
@@ -53,3 +57,7 @@ spec:
       - http01:
           ingress:
             ingressClassName: nginx
+            ingressTemplate:
+              metadata:
+                annotations:
+                  nginx.ingress.kubernetes.io/ssl-redirect: "false"

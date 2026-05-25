@@ -1,4 +1,5 @@
 publicURL: "https://vidcall3-prod.transmedika.co.id"
+turnHost: "157.15.164.236"
 
 enableAuth: true
 enableGuests: true
@@ -30,7 +31,7 @@ web:
       nginx.ingress.kubernetes.io/ssl-redirect: "true"
       # Switch to letsencrypt-prod once DNS and NAT are confirmed active.
       # Verify staging first: kubectl describe certificate jitsi-tls -n jitsi
-      cert-manager.io/cluster-issuer: "letsencrypt-staging"
+      cert-manager.io/cluster-issuer: "letsencrypt-prod"
     hosts:
       - host: vidcall3-prod.transmedika.co.id
         paths:
@@ -45,6 +46,7 @@ web:
     ENABLE_COLIBRI_WEBSOCKET: "1"
     COLIBRI_WEBSOCKET_REGEX: ".*"
     JVB_PREFER_SCTP: "false"
+
 
   nodeSelector:
     kubernetes.io/hostname: srv-deploy-eng
