@@ -46,6 +46,7 @@ web:
     ENABLE_COLIBRI_WEBSOCKET: "1"
     COLIBRI_WEBSOCKET_REGEX: ".*"
     JVB_PREFER_SCTP: "false"
+    WHITEBOARD_COLLAB_SERVER_URL_BASE: "https://vidcall3-prod.transmedika.co.id/excalidraw"
 
   extraVolumes:
     - name: watermark
@@ -315,7 +316,7 @@ jibri:
 # ==============================================================================
 # Excalidraw (whiteboard collaboration)
 # Ingress managed separately in manifests/excalidraw-ingress.yaml
-# Chart auto-sets WHITEBOARD_COLLAB_SERVER_URL_BASE — do not set in web.extraEnvs
+# WHITEBOARD_COLLAB_SERVER_URL_BASE overridden in web.extraEnvs — chart default points to internal cluster URL unreachable by browsers
 # ==============================================================================
 excalidraw:
   enabled: true
