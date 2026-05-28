@@ -1,0 +1,39 @@
+# Excalidraw ingress — path-based, reuses existing jitsi-tls secret
+# Routes /excalidraw to the chart-managed excalidraw service on port 9002.
+# WebSocket headers required — Excalidraw uses Socket.IO over WS.
+#
+# Same pattern as jitsi-colibri-ws.yaml — do NOT add proxy_set_header Host,
+# it causes backend rejection of the WebSocket upgrade.
+#
+# Apply: kubectl apply -f manifests/excalidraw-ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jitsi-excalidraw
+  namespace: jitsi
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/configuration-snippet: |
+      proxy_set_header Upgrade $http_upgrade;
+      proxy_set_header Connection "upgrade";
+      proxy_set_header X-Forwarded-Proto $scheme;
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: vidcall3-prod.transmedika.co.id
+      http:
+        paths:
+          - path: /excalidraw
+            pathType: Prefix
+            backend:
+              service:
+                name: jitsi-jitsi-meet-excalidraw
+                port:
+                  number: 9002
+  tls:
+    - hosts:
+        - vidcall3-prod.transmedika.co.id
+      secretName: jitsi-tls

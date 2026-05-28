@@ -262,3 +262,82 @@ websockets:
     enabled: true
   xmpp:
     enabled: true
+
+# ==============================================================================
+# Jibri (recording only, 2 replicas, single-use mode)
+# Pinned hard to jenkins — recordings written to NFS-backed PVC.
+# NFS server: jenkins (192.168.20.177)
+# To migrate storage: update jibri-pv.yaml only, no changes needed here.
+# ==============================================================================
+jibri:
+  enabled: true
+  replicaCount: 2
+  singleUseMode: true
+
+  xmpp:
+    password: "jibripass123"
+
+  recorder:
+    password: "jibrirecorderpass123"
+
+  recording: true
+  livestreaming: false
+
+  persistence:
+    enabled: true
+    existingClaim: jibri-recordings-pvc
+
+  shm:
+    enabled: true
+
+  nodeSelector:
+    kubernetes.io/hostname: jenkins
+
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                  - jenkins
+
+  resources:
+    requests:
+      cpu: 1000m
+      memory: 1500Mi
+    limits:
+      cpu: 2000m
+      memory: 2Gi
+
+# ==============================================================================
+# Excalidraw (whiteboard collaboration)
+# Ingress managed separately in manifests/excalidraw-ingress.yaml
+# Chart auto-sets WHITEBOARD_COLLAB_SERVER_URL_BASE — do not set in web.extraEnvs
+# ==============================================================================
+excalidraw:
+  enabled: true
+
+  nodeSelector:
+    kubernetes.io/hostname: srv-deploy-eng
+
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                  - srv-deploy-eng
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
