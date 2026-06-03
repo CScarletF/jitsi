@@ -1,5 +1,7 @@
 publicURL: "https://vidcall3-prod.transmedika.co.id"
 turnHost: "157.15.164.236"
+enableRecording: true
+fileRecordingsEnabled: true
 
 enableAuth: false
 enableGuests: true
@@ -46,7 +48,19 @@ web:
     ENABLE_COLIBRI_WEBSOCKET: "1"
     COLIBRI_WEBSOCKET_REGEX: ".*"
     JVB_PREFER_SCTP: "false"
-    WHITEBOARD_COLLAB_SERVER_URL_BASE: "https://vidcall3-prod.transmedika.co.id/excalidraw"
+    ENABLE_RECORDING: "1"
+    ENABLE_FILE_RECORDINGS_SERVICE: "1"
+    ENABLE_LOCAL_RECORDING_NOTIFY_ALL_PARTICIPANTS: "false"
+    # Disable local recording to avoid confusion — Jibri handles it server-side
+    ENABLE_LOCAL_RECORDING: "false"
+    JIBRI_BASE_URL: "http://jitsi-jitsi-meet-web.jitsi.svc.cluster.local"
+    ENABLE_PREJOIN_PAGE: "true"
+
+  securityContext:
+    capabilities:
+      add:
+        - SYS_ADMIN
+
 
   extraVolumes:
     - name: watermark
@@ -80,6 +94,14 @@ web:
       cpu: 500m
       memory: 256Mi
 
+  custom:
+    configs:
+      _custom_config_js: |
+        config.fileRecordingsEnabled = true;
+        config.liveStreamingEnabled = false;
+        config.hiddenDomain = "hidden.meet.jitsi";
+        config.disableP2P = true;
+        config.prejoinPageEnabled = true;
 # ==============================================================================
 # Prosody
 # ==============================================================================
@@ -265,32 +287,33 @@ websockets:
     enabled: true
 
 # ==============================================================================
-# Jibri (recording only, 2 replicas, single-use mode)
-# Pinned hard to jenkins — recordings written to NFS-backed PVC.
-# NFS server: jenkins (192.168.20.177)
-# To migrate storage: update jibri-pv.yaml only, no changes needed here.
+# Jibri (recording)
 # ==============================================================================
 jibri:
   enabled: true
   replicaCount: 2
+
+  # Single-use mode: each Jibri instance handles one recording at a time,
+  # then marks itself unavailable. Jicofo picks the next idle instance.
   singleUseMode: true
 
+  # XMPP credentials — must match what prosody has registered
   xmpp:
     password: "jibripass123"
 
-  recorder:
-    password: "jibrirecorderpass123"
+  recorderPassword: "jibrirecorderpass123"
 
-  recording: true
-  livestreaming: false
+  # Brewery MUC — jicofo watches this room for available Jibri instances.
+  # If Jibri never joins this MUC, jicofo will never see it.
+  brewery:
+    muc: "jibribrewery"
 
   persistence:
     enabled: true
-    existingClaim: jibri-recordings-pvc
+    existingClaim: "jibri-recordings-pvc"
+    mountPath: /data
 
-  shm:
-    enabled: true
-
+  # Pin to jenkins — it has 12GB RAM, better suited for Chrome + FFMPEG
   nodeSelector:
     kubernetes.io/hostname: jenkins
 
@@ -307,38 +330,25 @@ jibri:
 
   resources:
     requests:
-      cpu: 1000m
-      memory: 1500Mi
+      cpu: 500m
+      memory: 1Gi
     limits:
       cpu: 2000m
-      memory: 2Gi
+      memory: 3Gi
 
-# ==============================================================================
-# Excalidraw (whiteboard collaboration)
-# Ingress managed separately in manifests/excalidraw-ingress.yaml
-# WHITEBOARD_COLLAB_SERVER_URL_BASE overridden in web.extraEnvs — chart default points to internal cluster URL unreachable by browsers
-# ==============================================================================
-excalidraw:
-  enabled: true
+  # Jibri needs /dev/shm for Chrome. Default is 64Mi which causes Chrome to OOM.
+  # This overrides the emptyDir medium to use host memory.
+  extraVolumes:
+    - name: dev-shm
+      emptyDir:
+        medium: Memory
+        sizeLimit: 2Gi
 
-  nodeSelector:
-    kubernetes.io/hostname: srv-deploy-eng
+  extraVolumeMounts:
+    - name: dev-shm
+      mountPath: /dev/shm
 
-  affinity:
-    nodeAffinity:
-      preferredDuringSchedulingIgnoredDuringExecution:
-        - weight: 100
-          preference:
-            matchExpressions:
-              - key: kubernetes.io/hostname
-                operator: In
-                values:
-                  - srv-deploy-eng
-
-  resources:
-    requests:
-      cpu: 50m
-      memory: 64Mi
-    limits:
-      cpu: 500m
-      memory: 256Mi
+  hostAliases:
+    - ip: "192.168.20.190"
+      hostnames:
+        - "vidcall3-prod.transmedika.co.id"

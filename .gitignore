@@ -8,5 +8,10 @@ jitsi-tls/
 # Backup files
 backup/
 
+# Recording Folder
+recordings/
+
 # Helm cache
 .helm/
+jitsi-meet/
+recordings/
