@@ -55,6 +55,7 @@ web:
     ENABLE_LOCAL_RECORDING: "false"
     JIBRI_BASE_URL: "http://jitsi-jitsi-meet-web.jitsi.svc.cluster.local"
     ENABLE_PREJOIN_PAGE: "true"
+    WHITEBOARD_COLLAB_SERVER_PUBLIC_URL: "https://vidcall3-prod.transmedika.co.id/excalidraw"
 
   securityContext:
     capabilities:
@@ -102,6 +103,10 @@ web:
         config.hiddenDomain = "hidden.meet.jitsi";
         config.disableP2P = true;
         config.prejoinPageEnabled = true;
+        config.whiteboard = {
+          enabled: true,
+          collabServerBaseUrl: "https://vidcall3-prod.transmedika.co.id/excalidraw"
+        };
 # ==============================================================================
 # Prosody
 # ==============================================================================
@@ -301,7 +306,8 @@ jibri:
   xmpp:
     password: "jibripass123"
 
-  recorderPassword: "jibrirecorderpass123"
+  recorder:
+    password: "jibrirecorderpass123"
 
   # Brewery MUC — jicofo watches this room for available Jibri instances.
   # If Jibri never joins this MUC, jicofo will never see it.
@@ -352,3 +358,34 @@ jibri:
     - ip: "192.168.20.190"
       hostnames:
         - "vidcall3-prod.transmedika.co.id"
+
+# ==============================================================================
+# Excalidraw (in-meeting whiteboard backend)
+# ==============================================================================
+excalidraw:
+  enabled: true
+  image:
+    repository: jitsi/excalidraw-backend
+    tag: 2025.2.2
+
+  nodeSelector:
+    kubernetes.io/hostname: srv-deploy-eng
+
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                  - srv-deploy-eng
+
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
