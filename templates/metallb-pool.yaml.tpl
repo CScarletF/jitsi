@@ -5,6 +5,6 @@ metadata:
   namespace: metallb-system
 spec:
   addresses:
-    - 192.168.20.190/32
+    - ${METALLB_VIP}/32
   autoAssign: true
   avoidBuggyIPs: false

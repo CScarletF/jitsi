@@ -1,12 +1,6 @@
 # KEDA Helm values
 # Chart: kedacore/keda
-# Install: helm install keda kedacore/keda \
-#            -n keda --create-namespace \
-#            -f values/keda-values.yaml
-#
-# Repo add (if not already present):
-#   helm repo add kedacore https://kedacore.github.io/charts
-#   helm repo update
+# Rendered from templates/keda-values.yaml.tpl via apply.sh
 
 # ==============================================================================
 # Operator
@@ -21,10 +15,10 @@ operator:
       memory: 128Mi
 
   nodeSelector:
-    kubernetes.io/hostname: srv-deploy-eng
+    kubernetes.io/hostname: ${CONTROL_PLANE_NODE}
 
 # ==============================================================================
-# Metrics API server — exposes KEDA metrics to the Kubernetes HPA pipeline.
+# Metrics API server
 # ==============================================================================
 metricsServer:
   resources:
@@ -36,7 +30,7 @@ metricsServer:
       memory: 64Mi
 
   nodeSelector:
-    kubernetes.io/hostname: srv-deploy-eng
+    kubernetes.io/hostname: ${CONTROL_PLANE_NODE}
 
 # ==============================================================================
 # Webhooks
@@ -51,4 +45,4 @@ webhooks:
       memory: 64Mi
 
   nodeSelector:
-    kubernetes.io/hostname: srv-deploy-eng
+    kubernetes.io/hostname: ${CONTROL_PLANE_NODE}
